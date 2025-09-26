@@ -15,9 +15,18 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
-//import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -34,13 +43,46 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Divider
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
@@ -55,7 +97,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.squareup.moshi.Moshi
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import retrofit2.Retrofit
@@ -76,9 +124,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val colors =
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                    dynamicLightColorScheme(this)
+                    androidx.compose.material3.dynamicLightColorScheme(this)
                 else
-                    lightColorScheme()
+                    androidx.compose.material3.lightColorScheme()
 
             MaterialTheme(colorScheme = colors) { AppRoot() }
         }
@@ -246,8 +294,8 @@ class GameVm(private val api: RandomWordApi) : ViewModel() {
         viewModelScope.launch {
             tickJob?.cancel()
             state = state.copy(loading = true, level = level)
-            val minLen = max(3, 3 + (level - 1)) // longer words for higher levels
-            val word = fetchWordMinLength(minLen)
+            val minLen = max(3, 3 + (level - 1))
+            val word = runCatching { fetchWordMinLength(minLen) }.getOrElse { "android" }
             state = GameState(
                 player = state.player,
                 secret = word,
@@ -257,18 +305,19 @@ class GameVm(private val api: RandomWordApi) : ViewModel() {
                 startedAt = SystemClock.elapsedRealtime(),
                 level = level,
                 loading = false,
-                status = "Guess the word!"
+                status = if (word == "android") "Guess the word! (offline fallback)" else "Guess the word!"
             )
-            tickJob = viewModelScope.launch { while (isActive) delay(1000) } // tick for timer UI
+            tickJob = viewModelScope.launch { while (isActive) delay(1000) }
         }
     }
 
-    private suspend fun fetchWordMinLength(minLen: Int): String {
+    private suspend fun fetchWordMinLength(minLen: Int): String = withContext(Dispatchers.IO) {
         repeat(4) {
-            val w = api.getWord().firstOrNull()?.lowercase() ?: "android"
-            if (w.length >= minLen) return w
+            val w = runCatching { withTimeout(2000) { api.getWord().firstOrNull() } }
+                .getOrNull()?.lowercase()
+            if (!w.isNullOrBlank() && w.length >= minLen) return@withContext w
         }
-        return "android" // fallback
+        "android"
     }
 
     private fun normalize(w: String): String =
@@ -311,9 +360,7 @@ class GameVm(private val api: RandomWordApi) : ViewModel() {
             val msg = if (end) "❌ Failed! It was \"${s.secret}\". Score 0."
             else "Wrong ${newAttempts}/10 • Score $newScore"
             state = s.copy(attempts = newAttempts, score = newScore, status = msg)
-            if (end) {
-                onRoundFinished?.invoke(buildRecord(success = false, finalScore = newScore, finalAttempts = newAttempts))
-            }
+            if (end) onRoundFinished?.invoke(buildRecord(success = false, finalScore = newScore, finalAttempts = newAttempts))
         }
     }
 
@@ -389,12 +436,33 @@ fun AppRoot() {
         Prefs.saveHistory(ctx, history)
     }
 
+    // ⬇️ Gate the whole app on the name
+    if (name.isBlank()) {
+        Onboard(
+            onSave = { entered ->
+                val cleaned = entered.trim()
+                if (cleaned.isNotEmpty()) {
+                    Prefs.setName(ctx, cleaned)
+                    name = cleaned     // triggers recomposition -> below branch
+                }
+            }
+        )
+        return
+    }
+
+    // From here on, user has a name -> show nav scaffolding
     val nav = rememberNavController()
 
     // VM (shared across tabs)
     val vm = remember { GameVm(provideWordApi()) }
     LaunchedEffect(name) { vm.attachPlayer(name); vm.start(level = 1) }
     LaunchedEffect(Unit) { vm.onRoundFinished = { addHistory(it) } }
+
+    // Helper to reset profile and go back to onboarding
+    val resetProfile: () -> Unit = {
+        Prefs.setName(ctx, "")
+        name = ""                      // recomposes back to Onboard()
+    }
 
     Scaffold(
         bottomBar = {
@@ -429,7 +497,8 @@ fun AppRoot() {
                 PlayScreen(
                     vm = vm,
                     onRename = { newName -> Prefs.setName(ctx, newName); name = newName },
-                    onShowDashboard = { nav.navigate(Screen.Dashboard.route) }
+                    onShowDashboard = { nav.navigate(Screen.Dashboard.route) },
+                    onResetProfile = resetProfile   // ✅ new
                 )
             }
             composable(Screen.Dashboard.route) {
@@ -437,9 +506,37 @@ fun AppRoot() {
                     playerName = name,
                     history = history,
                     onClearHistory = { clearHistory() },
-                    onRename = { newName -> Prefs.setName(ctx, newName); name = newName }
+                    onRename = { newName -> Prefs.setName(ctx, newName); name = newName },
+                    onResetProfile = resetProfile   // ✅ new
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun Onboard(onSave: (String) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    Scaffold(topBar = { CenterAlignedTopAppBar(title = { Text("Welcome") }) }) { pad ->
+        Column(
+            Modifier.padding(pad).padding(24.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Let's get your name to personalize the game.", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("Your name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = { onSave(input) },
+                enabled = input.trim().isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Start") }
         }
     }
 }
@@ -451,9 +548,11 @@ fun AppRoot() {
 fun PlayScreen(
     vm: GameVm,
     onRename: (String) -> Unit,
-    onShowDashboard: () -> Unit
+    onShowDashboard: () -> Unit,
+    onResetProfile: () -> Unit = {}         // ✅ added, defaulted
 ) {
     val scope = rememberCoroutineScope()
+    val snack = remember { SnackbarHostState() }
 
     // Leaderboard state
     var showLb by remember { mutableStateOf(false) }
@@ -481,6 +580,7 @@ fun PlayScreen(
     useHapticsOnStatus(s.status)
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snack) },   // ✅ snackbars visible
         topBar = {
             FancyTopBar(
                 title = "Hi, ${s.player} — Level ${s.level}",
@@ -541,7 +641,10 @@ fun PlayScreen(
                 ) { Text("Guess") }
 
                 OutlinedButton(
-                    onClick = { vm.revealLength() },
+                    onClick = {
+                        val msg = vm.revealLength()
+                        scope.launch { snack.showSnackbar(msg) }   // ✅ show hint
+                    },
                     enabled = !s.loading
                 ) { Text("How many letters? (−5)") }
             }
@@ -555,7 +658,12 @@ fun PlayScreen(
                     Text("Letter occurrences (−5)")
                 }
                 FilledTonalButton(
-                    onClick = { scope.launch { vm.tip() } },
+                    onClick = {
+                        scope.launch {
+                            val msg = vm.tip()
+                            snack.showSnackbar(msg)                // ✅ show hint
+                        }
+                    },
                     enabled = s.attempts >= 5 && !s.tipUsed
                 ) { Text("Get tip (after 5 tries)") }
             }
@@ -599,7 +707,8 @@ fun PlayScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        vm.letterCount(letterInput)
+                        val msg = vm.letterCount(letterInput)
+                        scope.launch { snack.showSnackbar(msg) }   // ✅ show hint
                         letterInput = ""
                         showLetterDialog = false
                     }) { Text("OK") }
@@ -613,17 +722,18 @@ fun PlayScreen(
         // First-guess clue prompt
         if (showCluePrompt) {
             CluePromptDialog(
-                onLength = { vm.revealLength(); showCluePrompt = false },
-                onLetter = { showLetterDialog = true; showCluePrompt = false },
-                onProceedGuess = {
-                    // No-op here; user will press Guess again or use the field IME action
+                onLength = {
+                    val msg = vm.revealLength()
+                    scope.launch { snack.showSnackbar(msg) }
                     showCluePrompt = false
                 },
+                onLetter = { showLetterDialog = true; showCluePrompt = false },
+                onProceedGuess = { showCluePrompt = false },
                 canAfford = s.score >= 5
             )
         }
 
-        // Settings & quick dashboard sheet (rename + actions + debug)
+        // Settings & quick dashboard sheet (rename + actions + debug + reset profile)
         if (showSettings) {
             ModalBottomSheet(
                 onDismissRequest = { showSettings = false },
@@ -663,6 +773,20 @@ fun PlayScreen(
                     }
 
                     Spacer(Modifier.height(16.dp))
+                    Divider()
+                    Spacer(Modifier.height(12.dp))
+
+                    // 🔴 Destructive: clear profile and return to onboarding
+                    Button(
+                        onClick = { onResetProfile(); showSettings = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) { Text("Start over (clear profile)") }
+
+                    Spacer(Modifier.height(16.dp))
                     Text("Debug (don’t enable in demo)", style = MaterialTheme.typography.titleMedium)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -687,7 +811,8 @@ fun DashboardScreen(
     playerName: String,
     history: List<RoundRecord>,
     onClearHistory: () -> Unit,
-    onRename: (String) -> Unit
+    onRename: (String) -> Unit,
+    onResetProfile: () -> Unit = {}   // ✅ allow reset from here too
 ) {
     var showRename by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -717,7 +842,6 @@ fun DashboardScreen(
             Text("Hello, $playerName 👋", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(12.dp))
 
-            // 2-column grid for stats (no weight)
             val cards = listOf(
                 "Best Score" to (if (bestScore == 0) "—" else "$bestScore"),
                 "Fastest" to (if (fastest == 0) "—" else "%02d:%02d".format(fastest / 60, fastest % 60)),
@@ -763,7 +887,10 @@ fun DashboardScreen(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onClearHistory) { Text("Clear history") }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = onClearHistory) { Text("Clear history") }
+                    OutlinedButton(onClick = onResetProfile) { Text("Start over") }
+                }
             }
         }
 
@@ -795,6 +922,17 @@ fun DashboardScreen(
                         ) { Text("Save") }
                         OutlinedButton(onClick = { nameEdit = playerName }) { Text("Reset") }
                     }
+                    Spacer(Modifier.height(16.dp))
+                    Divider()
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { onResetProfile(); showRename = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) { Text("Start over (clear profile)") }
                     Spacer(Modifier.height(24.dp))
                 }
             }
@@ -958,8 +1096,8 @@ fun GuessField(
 fun useHapticsOnStatus(status: String) {
     val haptics = LocalHapticFeedback.current
     LaunchedEffect(status) {
-        if (status.startsWith("✅")) haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-        else if (status.startsWith("❌") || status.startsWith("Wrong")) haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+        if (status.startsWith("✅")) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        else if (status.startsWith("❌") || status.startsWith("Wrong")) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 }
 
