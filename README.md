@@ -26,7 +26,7 @@ A mobile word-guessing game
 ## 🔌 APIs
 
 - **Random word**: `https://random-word-api.herokuapp.com/word`  
-- **dreamlo** (optional): `http://dreamlo.com/lb/<PUBLIC|PRIVATE>/...`
+- **dreamlo** : `http://dreamlo.com/lb/<PUBLIC|PRIVATE>/...`
 
 
 ## ⚙️ Setup
